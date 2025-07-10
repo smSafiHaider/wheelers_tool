@@ -272,73 +272,157 @@ class WheelersScraperGUI:
             def grab(label: str):
                 return safe_text(_row_selector(label)) or safe_text(_table_selector(label))
 
-            categories = [
-                a.get_text(strip=True)
-                for a in soup.select("div.product-description a[href*='/category/']")
-            ]
-            categories_text = ", ".join(categories) if categories else None
+            def extract_single_book_data(soup_obj, isbn_val, base_url_val):
+                """Extract book data from a BeautifulSoup object."""
+                categories = [
+                    a.get_text(strip=True)
+                    for a in soup_obj.select("div.product-description a[href*='/category/']")
+                ]
+                categories_text = ", ".join(categories) if categories else None
 
-            image_url = None
-            if self.download_images_var.get():          
-                img_el = soup.select_one("img.cover")   
-                if img_el and img_el.get("src"):
-                    src = img_el["src"]
+                image_url = None
+                if self.download_images_var.get():          
+                    img_el = soup_obj.select_one("img.cover")   
+                    if img_el and img_el.get("src"):
+                        src = img_el["src"]
 
-                    # make it absolute
-                    if src.startswith("//"):            
-                        src = "https:" + src
-                    else:                               
-                        src = urljoin(url, src)
+                        # make it absolute
+                        if src.startswith("//"):            
+                            src = "https:" + src
+                        else:                               
+                            src = urljoin(base_url_val, src)
 
-                    image_url = src
+                        image_url = src
 
-            book_data = {
-                # Identifiers ---------------------------------------------------
-                "isbn": isbn,
-                "isbn_text": grab("ISBN:"),
-                "title": grab("Title") or safe_text("h1.title"),
-                "author": grab("Author") or safe_text("div.author a[href*='/author/']"),
-                "illustrator": safe_text("div.author div:nth-of-type(2) a.link"),
-                # Publication ---------------------------------------------------
-                "publisher": grab("Publisher:") or grab("Publisher"),
-                "published": grab("Published:"),
-                "published_imported": grab("Published (Imported):"),
-                "replaced_by": grab("Replaced by:"),
-                "language": grab("Language:"),
-                "series": grab("Series:") or safe_text("span.series a"),
-                "interest_age": grab("Interest age:"),
-                "ar_level": grab("AR:"),
-                "premiers_reading_challenge": grab("Premier's Reading Challenge:"),
-                "imprint": grab("Imprint"),
-                "publication_country": grab("Publication Country"),
-                "edition": grab("Edition"),
-                # Physical / meta -----------------------------------------------
-                "page_count": grab("Number of pages"),
-                "dimensions": grab("Dimensions"),
-                "weight": grab("Weight"),
-                "dewey_code": grab("Dewey Code"),
-                "reading_age": grab("Reading Age"),
-                "library_of_congress": grab("Library of Congress"),
-                "nbs_text": grab("NBS Text"),
-                "onix_text": grab("Onix Text"),
-                # Alternates -----------------------------------------------------
-                "alternate_edition": grab("Alternate edition"),
-                "alternate_isbn": grab("Alternate ISBN"),
-                "alternate_isbn_pub_date": grab("Alternate ISBN pub date"),
-                "alternate_isbn_price": grab("Alternate ISBN Price"),
-                # Misc -----------------------------------------------------------
-                "price": grab("Price"),
-                "full_description": grab("Full Description") or safe_text("div.description"),
-                "categories": categories_text,
-                "image_url": image_url,
-                "scraped_at": datetime.now().isoformat(),
-            }
+                # Use local grab function that works with the passed soup object
+                def local_grab(label: str):
+                    def local_safe_text(selector: str):
+                        el = soup_obj.select_one(selector)
+                        return el.get_text(strip=True) if el else None
+                    
+                    return local_safe_text(_row_selector(label)) or local_safe_text(_table_selector(label))
+                
+                return {
+                    # Identifiers ---------------------------------------------------
+                    "isbn": isbn_val,
+                    "isbn_text": local_grab("ISBN:"),
+                    "title": local_grab("Title") or safe_text("h1.title"),
+                    "author": local_grab("Author") or safe_text("div.author a[href*='/author/']"),
+                    "illustrator": safe_text("div.author div:nth-of-type(2) a.link"),
+                    # Publication ---------------------------------------------------
+                    "publisher": local_grab("Publisher:") or local_grab("Publisher"),
+                    "published": local_grab("Published:"),
+                    "published_imported": local_grab("Published (Imported):"),
+                    "replaced_by": local_grab("Replaced by:"),
+                    "language": local_grab("Language:"),
+                    "series": local_grab("Series:") or safe_text("span.series a"),
+                    "interest_age": local_grab("Interest age:"),
+                    "ar_level": local_grab("AR:"),
+                    "premiers_reading_challenge": local_grab("Premier's Reading Challenge:"),
+                    "imprint": local_grab("Imprint"),
+                    "publication_country": local_grab("Publication Country"),
+                    "edition": local_grab("Edition"),
+                    # Physical / meta -----------------------------------------------
+                    "page_count": local_grab("Number of pages"),
+                    "dimensions": local_grab("Dimensions"),
+                    "weight": local_grab("Weight"),
+                    "dewey_code": local_grab("Dewey Code"),
+                    "reading_age": local_grab("Reading Age"),
+                    "library_of_congress": local_grab("Library of Congress"),
+                    "nbs_text": local_grab("NBS Text"),
+                    "onix_text": local_grab("Onix Text"),
+                    # Misc -----------------------------------------------------------
+                    "price": local_grab("Price"),
+                    "full_description": local_grab("Full Description") or safe_text("div.description"),
+                    "categories": categories_text,
+                    "image_url": image_url,
+                    "scraped_at": datetime.now().isoformat(),
+                }
+
+            def get_alternate_data():
+                """Extract alternate format data from the current page."""
+                alternate_data = []
+                all_alt_formats_section = soup.select('#allAltFormats ul li a[href*="/product/"]')
+                
+                for link in all_alt_formats_section:
+                    href = link.get('href')
+                    if href and href != url:  # Don't include current page
+                        # Make absolute URL
+                        if href.startswith('/'):
+                            href = 'https://www.wheelersbooks.com.au' + href
+
+                        try:
+                            alt_res = requests.get(
+                                href,
+                                headers={"User-Agent": "Mozilla/5.0 (compatible)"},
+                                timeout=30,
+                            )
+                            if alt_res.status_code != 200:
+                                continue  # Skip this alternate, don't fail entire function
+
+                            alt_soup = BeautifulSoup(alt_res.text, "html.parser")
+                            
+                            # Create local_grab function for alternate soup
+                            def alt_local_grab(label: str):
+                                def alt_local_safe_text(selector: str):
+                                    el = alt_soup.select_one(selector)
+                                    return el.get_text(strip=True) if el else None
+                                
+                                return alt_local_safe_text(_row_selector(label)) or alt_local_safe_text(_table_selector(label))
+                            
+                            # Extract only the 4 alternate fields
+                            alt_data = {
+                                "alternate_edition": alt_local_grab("Edition"),
+                                "alternate_isbn": alt_local_grab("ISBN:"),
+                                "alternate_isbn_pub_date": alt_local_grab("Published:"),
+                                "alternate_isbn_price": alt_local_grab("Price"),
+                            }
+                            
+                            alternate_data.append(alt_data)
+                            
+                        except Exception as e:
+                            # Log the error but continue processing other alternates
+                            print(f"Error processing alternate format {href}: {e}")
+                            continue
+                
+                return alternate_data
+
+            # Extract main book data
+            book_data = extract_single_book_data(soup, isbn, url)
+            
+            # Extract alternate formats
+            alternates = get_alternate_data()
+            
+            # Option 1: Flatten alternates into the main book data (takes first alternate only)
+            if alternates:
+                first_alt = alternates[0]
+                book_data.update(first_alt)
+            else:
+                # Add empty alternate fields if no alternates found
+                book_data.update({
+                    "alternate_edition": None,
+                    "alternate_isbn": None,
+                    "alternate_isbn_pub_date": None,
+                    "alternate_isbn_price": None,
+                })
+            
+            # Option 2: JSON string (uncomment if you prefer this approach)
+            # import json
+            # book_data["alternates_json"] = json.dumps(alternates) if alternates else None
+            
+            # Option 3: Pipe-separated values (uncomment if you prefer this approach)
+            # if alternates:
+            #     book_data["alternate_editions"] = " | ".join([alt.get("alternate_edition", "") for alt in alternates if alt.get("alternate_edition")])
+            #     book_data["alternate_isbns"] = " | ".join([alt.get("alternate_isbn", "") for alt in alternates if alt.get("alternate_isbn")])
+            #     book_data["alternate_pub_dates"] = " | ".join([alt.get("alternate_isbn_pub_date", "") for alt in alternates if alt.get("alternate_isbn_pub_date")])
+            #     book_data["alternate_prices"] = " | ".join([alt.get("alternate_isbn_price", "") for alt in alternates if alt.get("alternate_isbn_price")])
 
             return book_data
 
         except Exception as exc:
             # Bubble up a clean message
             return {"isbn": isbn, "error": str(exc)}
+
     
     def scrape_books(self):
         """Main scraping function"""
