@@ -415,8 +415,7 @@ class WheelersScraperGUI:
                 
                 return {
                     # Identifiers ---------------------------------------------------
-                    "isbn": isbn_val,
-                    "isbn_text": local_grab("ISBN:"),
+                    "isbn": local_grab("ISBN:"),
                     "title": local_grab("Title") or safe_text("h1.title"),
                     "author": local_grab("Author") or safe_text("div.author a[href*='/author/']"),
                     "illustrator": safe_text("div.author div:nth-of-type(2) a.link"),
