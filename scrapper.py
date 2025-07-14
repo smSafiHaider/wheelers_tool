@@ -12,6 +12,7 @@ import json
 import traceback
 from datetime import datetime
 from urllib.parse import urljoin
+import re
 
 class WheelersScraperGUI:
     def __init__(self, root):
@@ -27,6 +28,7 @@ class WheelersScraperGUI:
         self.isbn_list = []
         self.scraped_data = []
         self.is_scraping = False
+        self.images_folder = "book_images"  # Default folder for images
         
         self.setup_gui()
         
@@ -81,9 +83,29 @@ class WheelersScraperGUI:
         options_frame = ttk.LabelFrame(main_frame, text="Scraping Options", padding=10)
         options_frame.pack(fill=tk.X, pady=(0, 10))
         
+        # Image download options
+        image_frame = ttk.Frame(options_frame)
+        image_frame.pack(fill=tk.X, pady=(0, 5))
+        
         self.download_images_var = tk.BooleanVar()
-        ttk.Checkbutton(options_frame, text="Download Book Images", 
-                       variable=self.download_images_var).pack(anchor=tk.W)
+        ttk.Checkbutton(image_frame, text="Download Book Images", 
+                       variable=self.download_images_var,
+                       command=self.toggle_image_options).pack(side=tk.LEFT)
+        
+        # Image folder selection
+        self.image_folder_frame = ttk.Frame(options_frame)
+        self.image_folder_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(self.image_folder_frame, text="Images Folder:").pack(side=tk.LEFT)
+        self.images_folder_var = tk.StringVar(value=self.images_folder)
+        self.folder_label = ttk.Label(self.image_folder_frame, textvariable=self.images_folder_var)
+        self.folder_label.pack(side=tk.LEFT, padx=(5, 0))
+        
+        ttk.Button(self.image_folder_frame, text="Browse", 
+                  command=self.select_images_folder).pack(side=tk.LEFT, padx=(10, 0))
+        
+        # Initially hide image folder options
+        self.image_folder_frame.pack_forget()
         
         self.save_to_db_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(options_frame, text="Save to Database", 
@@ -128,6 +150,21 @@ class WheelersScraperGUI:
         
         self.setup_db_tab(db_frame)
     
+    def toggle_image_options(self):
+        """Show/hide image folder options based on checkbox state"""
+        if self.download_images_var.get():
+            self.image_folder_frame.pack(fill=tk.X, pady=(0, 5))
+        else:
+            self.image_folder_frame.pack_forget()
+    
+    def select_images_folder(self):
+        """Select folder for storing downloaded images"""
+        folder_path = filedialog.askdirectory(title="Select Images Folder")
+        if folder_path:
+            self.images_folder = folder_path
+            self.images_folder_var.set(folder_path)
+            self.log_message(f"Images folder set to: {folder_path}")
+    
     def setup_db_tab(self, parent):
         """Setup database configuration tab"""
         db_config_frame = ttk.LabelFrame(parent, text="MySQL Database Configuration", padding=20)
@@ -171,6 +208,72 @@ class WheelersScraperGUI:
         self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
         self.log_text.see(tk.END)
         self.root.update_idletasks()
+    
+    def sanitize_filename(self, filename):
+        """Sanitize filename to be safe for file system"""
+        # Remove or replace invalid characters
+        filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+        # Remove leading/trailing spaces and dots
+        filename = filename.strip(' .')
+        # Limit length
+        if len(filename) > 100:
+            filename = filename[:100]
+        return filename
+    
+    def download_image(self, image_url, isbn, title=None):
+        """Download and save book image"""
+        try:
+            # Create images folder if it doesn't exist
+            os.makedirs(self.images_folder, exist_ok=True)
+            
+            # Get image data
+            response = requests.get(image_url, timeout=30, 
+                                  headers={"User-Agent": "Mozilla/5.0 (compatible)"})
+            response.raise_for_status()
+            
+            # Determine file extension from URL or content type
+            content_type = response.headers.get('content-type', '')
+            if 'jpeg' in content_type or 'jpg' in content_type:
+                ext = '.jpg'
+            elif 'png' in content_type:
+                ext = '.png'
+            elif 'gif' in content_type:
+                ext = '.gif'
+            else:
+                # Try to get extension from URL
+                ext = os.path.splitext(image_url.split('?')[0])[1].lower()
+                if not ext or ext not in ['.jpg', '.jpeg', '.png', '.gif']:
+                    ext = '.jpg'  # Default to jpg
+            
+            # Create filename
+            if title:
+                safe_title = self.sanitize_filename(title)
+                filename = f"{isbn}_{safe_title}{ext}"
+            else:
+                filename = f"{isbn}{ext}"
+            
+            # Full path
+            filepath = os.path.join(self.images_folder, filename)
+            
+            # Save image
+            with open(filepath, 'wb') as f:
+                f.write(response.content)
+            
+            # Verify it's a valid image by trying to open it
+            try:
+                with Image.open(filepath) as img:
+                    img.verify()
+            except Exception:
+                # If verification fails, remove the file
+                os.remove(filepath)
+                return None
+            
+            self.log_message(f"Downloaded image: {filename}")
+            return filepath
+            
+        except Exception as e:
+            self.log_message(f"Failed to download image for ISBN {isbn}: {str(e)}")
+            return None
     
     def select_file(self):
         """Select CSV or Excel file containing ISBNs"""
@@ -281,18 +384,26 @@ class WheelersScraperGUI:
                 categories_text = ", ".join(categories) if categories else None
 
                 image_url = None
-                if self.download_images_var.get():          
-                    img_el = soup_obj.select_one("img.cover")   
-                    if img_el and img_el.get("src"):
-                        src = img_el["src"]
+                local_image_path = None
+                
+                # Always extract image URL
+                img_el = soup_obj.select_one("img.cover")   
+                if img_el and img_el.get("src"):
+                    src = img_el["src"]
 
-                        # make it absolute
-                        if src.startswith("//"):            
-                            src = "https:" + src
-                        else:                               
-                            src = urljoin(base_url_val, src)
+                    # make it absolute
+                    if src.startswith("//"):            
+                        src = "https:" + src
+                    else:                               
+                        src = urljoin(base_url_val, src)
 
-                        image_url = src
+                    image_url = src
+                    
+                    # Download image if option is enabled
+                    if self.download_images_var.get() and image_url:
+                        # Get title for filename
+                        title = grab("Title") or safe_text("h1.title")
+                        local_image_path = self.download_image(image_url, isbn_val, title)
 
                 # Use local grab function that works with the passed soup object
                 def local_grab(label: str):
@@ -332,10 +443,10 @@ class WheelersScraperGUI:
                     "nbs_text": local_grab("NBS Text"),
                     "onix_text": local_grab("Onix Text"),
                     # Misc -----------------------------------------------------------
-                    "price": local_grab("Price"),
-                    "full_description": local_grab("Full Description") or safe_text("div.description"),
+                    "price": local_grab("Price") or safe_text("span.price.red-text.bold") or safe_text("span.price"),                    "full_description": local_grab("Full Description") or safe_text("div.description"),
                     "categories": categories_text,
                     "image_url": image_url,
+                    "local_image_path": local_image_path,  # New field for local image path
                     "scraped_at": datetime.now().isoformat(),
                 }
 
@@ -375,7 +486,7 @@ class WheelersScraperGUI:
                                 "alternate_edition": alt_local_grab("Edition"),
                                 "alternate_isbn": alt_local_grab("ISBN:"),
                                 "alternate_isbn_pub_date": alt_local_grab("Published:"),
-                                "alternate_isbn_price": alt_local_grab("Price"),
+                                "alternate_isbn_price": alt_local_grab("Price") or safe_text("span.price.red-text.bold") or safe_text("span.price"),
                             }
                             
                             alternate_data.append(alt_data)
@@ -406,17 +517,6 @@ class WheelersScraperGUI:
                     "alternate_isbn_price": None,
                 })
             
-            # Option 2: JSON string (uncomment if you prefer this approach)
-            # import json
-            # book_data["alternates_json"] = json.dumps(alternates) if alternates else None
-            
-            # Option 3: Pipe-separated values (uncomment if you prefer this approach)
-            # if alternates:
-            #     book_data["alternate_editions"] = " | ".join([alt.get("alternate_edition", "") for alt in alternates if alt.get("alternate_edition")])
-            #     book_data["alternate_isbns"] = " | ".join([alt.get("alternate_isbn", "") for alt in alternates if alt.get("alternate_isbn")])
-            #     book_data["alternate_pub_dates"] = " | ".join([alt.get("alternate_isbn_pub_date", "") for alt in alternates if alt.get("alternate_isbn_pub_date")])
-            #     book_data["alternate_prices"] = " | ".join([alt.get("alternate_isbn_price", "") for alt in alternates if alt.get("alternate_isbn_price")])
-
             return book_data
 
         except Exception as exc:
@@ -428,6 +528,14 @@ class WheelersScraperGUI:
         """Main scraping function"""
         self.scraped_data = []
         total_books = len(self.isbn_list)
+        
+        # Create images folder if downloading images
+        if self.download_images_var.get():
+            try:
+                os.makedirs(self.images_folder, exist_ok=True)
+                self.log_message(f"Images will be saved to: {self.images_folder}")
+            except Exception as e:
+                self.log_message(f"Error creating images folder: {str(e)}")
         
         self.progress_bar['maximum'] = total_books
         
@@ -444,7 +552,12 @@ class WheelersScraperGUI:
             if 'error' in book_data:
                 self.log_message(f"Error for ISBN {isbn}: {book_data['error']}")
             else:
-                self.log_message(f"Successfully scraped: {book_data.get('title', 'Unknown Title')}")
+                title = book_data.get('title', 'Unknown Title')
+                self.log_message(f"Successfully scraped: {title}")
+                
+                # Log if image was downloaded
+                if self.download_images_var.get() and book_data.get('local_image_path'):
+                    self.log_message(f"  └─ Image saved: {os.path.basename(book_data['local_image_path'])}")
             
             self.progress_bar['value'] = i + 1
             self.root.update_idletasks()
@@ -460,7 +573,11 @@ class WheelersScraperGUI:
             self.export_csv_button.config(state=tk.NORMAL)
             self.export_excel_button.config(state=tk.NORMAL)
             
+            # Log summary
+            downloaded_images = sum(1 for book in self.scraped_data if book.get('local_image_path'))
             self.log_message("Scraping completed successfully!")
+            if self.download_images_var.get():
+                self.log_message(f"Downloaded {downloaded_images} images to {self.images_folder}")
         
         self.is_scraping = False
         self.start_button.config(text="Start Scraping")
