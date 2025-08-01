@@ -442,7 +442,7 @@ class WheelersScraperGUI:
                     "nbs_text": local_grab("NBS Text"),
                     "onix_text": local_grab("Onix Text"),
                     # Misc -----------------------------------------------------------
-                    "price": local_grab("Price") or safe_text("span.price.red-text.bold") or safe_text("span.price"),                    "full_description": local_grab("Full Description") or safe_text("div.description"),
+                    "price": local_grab("Price") or safe_text("div.price.red-text.bold") or safe_text("span.price"),                    "full_description": local_grab("Full Description") or safe_text("div.description"),
                     "categories": categories_text,
                     "image_url": image_url,
                     "local_image_path": local_image_path,  # New field for local image path
@@ -485,7 +485,7 @@ class WheelersScraperGUI:
                                 "alternate_edition": alt_local_grab("Edition"),
                                 "alternate_isbn": alt_local_grab("ISBN:"),
                                 "alternate_isbn_pub_date": alt_local_grab("Published:"),
-                                "alternate_isbn_price": alt_local_grab("Price") or safe_text("span.price.red-text.bold") or safe_text("span.price"),
+                                "alternate_isbn_price": safe_text("span.price.red-text"),
                             }
                             
                             alternate_data.append(alt_data)
@@ -520,7 +520,7 @@ class WheelersScraperGUI:
 
         except Exception as exc:
             # Bubble up a clean message
-            return {"isbn": isbn, "error": str(exc)}
+            return {"isbn": isbn}
 
     
     def scrape_books(self):
