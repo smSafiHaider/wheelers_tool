@@ -2,13 +2,18 @@ name: Build Windows EXE (PyInstaller)
 on:
   workflow_dispatch:
   push:
+    branches: [ main ]
     paths:
       - "scrapper.py"
-      - "requirements.py"
+      - "requirements.txt"
       - ".github/workflows/build-windows-exe.yml"
+  release:
+    types: [ created ]
 jobs:
   build-windows:
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,14 +26,52 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.py
+          pip install -r requirements.txt
           pip install pyinstaller
       
       - name: Build EXE with PyInstaller
         run: |
           pyinstaller --onefile --windowed --name "WheelersScraper" scrapper.py
       
-      - name: Upload artifact
+      - name: Generate version tag
+        id: version
+        run: |
+          $timestamp = Get-Date -Format "yyyy.MM.dd.HHmm"
+          $version = "v$timestamp"
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          echo "Generated version: $version"
+      
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          release_name: WheelersScraper ${{ steps.version.outputs.VERSION }}
+          body: |
+            Automated build of WheelersScraper
+            
+            **Download the executable:**
+            - Windows: WheelersScraper.exe
+            
+            **Changes in this build:**
+            - Built from commit: ${{ github.sha }}
+            - Build date: ${{ steps.version.outputs.VERSION }}
+          draft: false
+          prerelease: false
+      
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: dist/WheelersScraper.exe
+          asset_name: WheelersScraper.exe
+          asset_content_type: application/octet-stream
+      
+      - name: Upload artifact (backup)
         uses: actions/upload-artifact@v4
         with:
           name: WheelersScraper-windows
