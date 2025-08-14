@@ -1,0 +1,44 @@
+name: Build Windows EXE (PyInstaller)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "scrapper.py"
+      - "requirements.py"
+      - ".github/workflows/build-windows-exe.yml"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Build the EXE using the Marketplace action
+      - name: Create Windows EXE
+        uses: Martin005/pyinstaller-action@v1
+        with:
+          # Match your local Python exactly
+          python_ver: "3.12.3"
+
+          # Your entry file at repo root
+          spec: "scrapper.py"
+
+          # Your dependency file (you said it's requirements.py)
+          # If you switch to requirements.txt later, just change this path.
+          requirements: "requirements.py"
+
+          # Common GUI flags for tkinter apps
+          options: --onefile, --windowed, --name "WheelersScraper"
+
+          # Upload the built artifact so you can download it from the run
+          upload_exe_with_name: "WheelersScraper-windows"
+
+      # (Optional) Show where the exe was placed on the runner
+      - name: Print output path
+        shell: pwsh
+        run: |
+          Write-Host "Dist contents:"
+          Get-ChildItem -Recurse dist
