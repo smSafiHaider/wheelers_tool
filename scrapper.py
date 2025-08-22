@@ -1,4 +1,5 @@
 import tkinter as tk
+import sys
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import requests
 from bs4 import BeautifulSoup
@@ -13,6 +14,7 @@ import traceback
 from datetime import datetime
 from urllib.parse import urljoin
 import re
+from pathlib import WindowsPath, Path
 
 class WheelersScraperGUI:
     def __init__(self, root):
@@ -246,11 +248,7 @@ class WheelersScraperGUI:
                     ext = '.jpg'  # Default to jpg
             
             # Create filename
-            if title:
-                safe_title = self.sanitize_filename(title)
-                filename = f"{isbn}_{safe_title}{ext}"
-            else:
-                filename = f"{isbn}{ext}"
+            filename = f"{isbn}{ext}"
             
             # Full path
             filepath = os.path.join(self.images_folder, filename)
@@ -269,6 +267,12 @@ class WheelersScraperGUI:
                 return None
             
             self.log_message(f"Downloaded image: {filename}")
+
+            filepath = str(Path(filepath).absolute())
+
+            if sys.platform not in ['linux', 'darwin']:
+                filepath = filepath.replace("/", "\\")
+
             return filepath
             
         except Exception as e:
@@ -453,49 +457,68 @@ class WheelersScraperGUI:
                 """Extract alternate format data from the current page."""
                 alternate_data = []
                 all_alt_formats_section = soup.select('#allAltFormats ul li a[href*="/product/"]')
-                
+
+                def abs_url(href: str) -> str:
+                    return urljoin('https://www.wheelersbooks.com.au', href)
+
+                current_url_norm = url.rstrip('/')
+
                 for link in all_alt_formats_section:
                     href = link.get('href')
-                    if href and href != url:  # Don't include current page
-                        # Make absolute URL
-                        if href.startswith('/'):
-                            href = 'https://www.wheelersbooks.com.au' + href
+                    if not href:
+                        continue
+                    href = abs_url(href)
+                    if href.rstrip('/') == current_url_norm:
+                        continue  # skip current page
 
-                        try:
-                            alt_res = requests.get(
-                                href,
-                                headers={"User-Agent": "Mozilla/5.0 (compatible)"},
-                                timeout=30,
-                            )
-                            if alt_res.status_code != 200:
-                                continue  # Skip this alternate, don't fail entire function
-
-                            alt_soup = BeautifulSoup(alt_res.text, "html.parser")
-                            
-                            # Create local_grab function for alternate soup
-                            def alt_local_grab(label: str):
-                                def alt_local_safe_text(selector: str):
-                                    el = alt_soup.select_one(selector)
-                                    return el.get_text(strip=True) if el else None
-                                
-                                return alt_local_safe_text(_row_selector(label)) or alt_local_safe_text(_table_selector(label))
-                            
-                            # Extract only the 4 alternate fields
-                            alt_data = {
-                                "alternate_edition": alt_local_grab("Edition"),
-                                "alternate_isbn": alt_local_grab("ISBN:"),
-                                "alternate_isbn_pub_date": alt_local_grab("Published:"),
-                                "alternate_isbn_price": safe_text("span.price.red-text"),
-                            }
-                            
-                            alternate_data.append(alt_data)
-                            
-                        except Exception as e:
-                            # Log the error but continue processing other alternates
-                            print(f"Error processing alternate format {href}: {e}")
+                    try:
+                        alt_res = requests.get(
+                            href,
+                            headers={"User-Agent": "Mozilla/5.0 (compatible)"},
+                            timeout=30,
+                        )
+                        if alt_res.status_code != 200:
                             continue
-                
+
+                        alt_soup = BeautifulSoup(alt_res.text, "html.parser")
+
+                        def alt_safe_text(selector: str):
+                            el = alt_soup.select_one(selector)
+                            return el.get_text(strip=True) if el else None
+
+                        def alt_local_grab(label: str):
+                            def _row_selector(label_text: str) -> str:
+                                safe = label_text.replace('"', '\\"')
+                                return f'div.row:has(label:contains("{safe}")) span'
+                            def _table_selector(label_text: str) -> str:
+                                safe = label_text.replace('"', '\\"')
+                                return f'tr:has(th:contains("{safe}")) td'
+                            return (
+                                alt_safe_text(_row_selector(label))
+                                or alt_safe_text(_table_selector(label))
+                            )
+
+                        alt_price = (
+                            alt_local_grab("Price")
+                            or alt_safe_text("div.price.red-text.bold")
+                            or alt_safe_text("span.price.red-text")
+                            or alt_safe_text("span.price")
+                        )
+
+                        alt_data = {
+                            "alternate_edition":        alt_local_grab("Edition"),
+                            "alternate_isbn":           alt_local_grab("ISBN:"),
+                            "alternate_isbn_pub_date":  alt_local_grab("Published:"),
+                            "alternate_isbn_price":     alt_price,
+                        }
+                        alternate_data.append(alt_data)
+
+                    except Exception:
+                        continue
+
                 return alternate_data
+
+
 
             # Extract main book data
             book_data = extract_single_book_data(soup, isbn, url)
